@@ -16,11 +16,7 @@ type CartItem = {
   quantity: number;
 };
 
-const DUMMY_PRODUCTS: Product[] = [
-  { code: '1001', name: 'ブレンドコーヒー', price: 400 },
-  { code: '1002', name: 'カフェラテ', price: 450 },
-  { code: '1003', name: 'ホットコーラ', price: 500 },
-];
+
 
 // ダミー：あとで tax_rates（税率マスタ）から取得する
 const TAX_RATE_PERCENT = 10;
@@ -34,17 +30,33 @@ export default function PosPage() {
     // ★⑤-1：合計ポップアップを出すかどうか
   const [showTotal, setShowTotal] = useState(false);
 
-  const handleSearch = () => {
-    const product = DUMMY_PRODUCTS.find((p) => p.code === productCode);
+ const handleSearch = async () => {
+  if (productCode === '') {
+    setFoundProduct(null);
+    setMessage('商品コードを入力してください');
+    return;
+  }
 
-    if (product) {
-      setFoundProduct(product);
+  try {
+    const res = await fetch(`/api/products/${encodeURIComponent(productCode)}`);
+    const data = await res.json();
+
+    if (res.ok) {
+      setFoundProduct({
+        code: data.product_code,
+        name: data.name,
+        price: data.price,
+      });
       setMessage('');
     } else {
       setFoundProduct(null);
-      setMessage('商品がマスタ未登録です');
+      setMessage(data.message);
     }
-  };
+  } catch {
+    setFoundProduct(null);
+    setMessage('通信エラーが発生しました');
+  }
+};  
 
   // ★③-3：「購入リストへ追加」を押した時にやること
   const handleAdd = () => {
