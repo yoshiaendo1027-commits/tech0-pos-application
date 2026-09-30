@@ -7,7 +7,6 @@ type Product = {
   price: number;
 };
 
-// ★③-1：購入リストの1行分の型
 type CartItem = {
   id: string; // 行を区別する番号（同じ商品が2行になるため必要）
   code: string;
@@ -16,56 +15,110 @@ type CartItem = {
   quantity: number;
 };
 
+// お客様の状態：会員 か 非会員（未選択の間は null）
+type Customer =
+  | { type: 'member'; code: string; name: string }
+  | { type: 'guest' };
 
+// サーバーが返した購入結果の型
+type TransactionResult = {
+  transactionId: number;
+  totalWithoutTax: number;
+  taxAmount: number;
+  totalWithTax: number;
+};
 
-// ダミー：あとで tax_rates（税率マスタ）から取得する
+// ダミー：ログインがまだダミーのため、担当者は固定。あとでログイン情報から取る
+const STAFF_CODE = 'S001';
+
+// 画面表示用の税率。確定した金額は、サーバーが税率マスタから計算する
 const TAX_RATE_PERCENT = 10;
 
 export default function PosPage() {
   const [productCode, setProductCode] = useState('');
   const [message, setMessage] = useState('');
   const [foundProduct, setFoundProduct] = useState<Product | null>(null);
-  // ★③-2：購入リストを覚える箱（最初は空）
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
-    // ★⑤-1：合計ポップアップを出すかどうか
   const [showTotal, setShowTotal] = useState(false);
+  const [result, setResult] = useState<TransactionResult | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
- const handleSearch = async () => {
-  if (productCode === '') {
-    setFoundProduct(null);
-    setMessage('商品コードを入力してください');
-    return;
-  }
+  // 会員まわり：入力中の会員ID、確定したお客様、会員側のメッセージ
+  const [memberCodeInput, setMemberCodeInput] = useState('');
+  const [customer, setCustomer] = useState<Customer | null>(null);
+  const [memberMessage, setMemberMessage] = useState('');
 
-  try {
-    const res = await fetch(`/api/products/${encodeURIComponent(productCode)}`);
-    const data = await res.json();
-
-    if (res.ok) {
-      setFoundProduct({
-        code: data.product_code,
-        name: data.name,
-        price: data.price,
-      });
-      setMessage('');
-    } else {
-      setFoundProduct(null);
-      setMessage(data.message);
+  // 「会員ID読み込み」を押した時：APIで会員を探す
+  const handleLoadMember = async () => {
+    if (memberCodeInput === '') {
+      setMemberMessage('会員IDを入力してください');
+      return;
     }
-  } catch {
-    setFoundProduct(null);
-    setMessage('通信エラーが発生しました');
-  }
-};  
 
-  // ★③-3：「購入リストへ追加」を押した時にやること
+    try {
+      const res = await fetch(
+        `/api/members/${encodeURIComponent(memberCodeInput)}`
+      );
+      const data = await res.json();
+
+      if (res.ok) {
+        setCustomer({ type: 'member', code: data.member_code, name: data.name });
+        setMemberMessage('');
+      } else if (res.status === 404) {
+        setCustomer(null);
+        setMemberMessage(`${data.message}（非会員として続行できます）`);
+      } else {
+        setCustomer(null);
+        setMemberMessage(data.message);
+      }
+    } catch {
+      setCustomer(null);
+      setMemberMessage('通信エラーが発生しました');
+    }
+  };
+
+  // 「お客様ID読み込み」を押した時：非会員として進める
+  const handleGuest = () => {
+    setCustomer({ type: 'guest' });
+    setMemberCodeInput('');
+    setMemberMessage('');
+  };
+
+  // 「検索」を押した時：APIで商品を探す
+  const handleSearch = async () => {
+    if (productCode === '') {
+      setFoundProduct(null);
+      setMessage('商品コードを入力してください');
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/products/${encodeURIComponent(productCode)}`);
+      const data = await res.json();
+
+      if (res.ok) {
+        setFoundProduct({
+          code: data.product_code,
+          name: data.name,
+          price: data.price,
+        });
+        setMessage('');
+      } else {
+        setFoundProduct(null);
+        setMessage(data.message);
+      }
+    } catch {
+      setFoundProduct(null);
+      setMessage('通信エラーが発生しました');
+    }
+  };
+
+  // 「購入リストへ追加」を押した時
   const handleAdd = () => {
     if (!foundProduct) {
       setMessage('先に商品を検索してください');
       return;
     }
-
-
 
     const newItem: CartItem = {
       id: crypto.randomUUID(),
@@ -83,25 +136,64 @@ export default function PosPage() {
     setMessage('');
   };
 
-  // ★⑤-2a：「購入確定」を押した時（あとでここにAPI呼び出しが入る）
-  const handleConfirm = () => {
+  // 「購入確定」を押した時：サーバーに保存して、返ってきた合計を表示する
+  const handleConfirm = async () => {
+    if (isSubmitting) return; // 二重送信の防止
     if (cartItems.length === 0) {
       setMessage('購入リストが空です');
       return;
     }
-    setShowTotal(true);
+
+    setIsSubmitting(true);
+    try {
+      const res = await fetch('/api/transactions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          staff_code: STAFF_CODE,
+          // 会員の時だけ送る（undefined は JSON に含まれない）
+          member_code: customer?.type === 'member' ? customer.code : undefined,
+          items: cartItems.map((item) => ({
+            product_code: item.code,
+            quantity: item.quantity,
+          })),
+        }),
+      });
+      const data = await res.json();
+
+      if (res.ok) {
+        setResult({
+          transactionId: data.transaction_id,
+          totalWithoutTax: data.total_without_tax,
+          taxAmount: data.tax_amount,
+          totalWithTax: data.total_with_tax,
+        });
+        setMessage('');
+        setShowTotal(true);
+      } else {
+        setMessage(data.message);
+      }
+    } catch {
+      setMessage('通信エラーが発生しました');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
- 
-  // ★⑤-2b：ポップアップを閉じた時（画面をすべてクリアする）
+
+  // ポップアップを閉じた時：画面をすべてクリアして、次の会員ID登録から再開する
   const handleClose = () => {
     setShowTotal(false);
+    setResult(null);
     setCartItems([]);
     setProductCode('');
     setFoundProduct(null);
     setMessage('');
+    setMemberCodeInput('');
+    setCustomer(null);
+    setMemberMessage('');
   };
 
-  // ★④-2：合計の計算（useState にせず、毎回 cartItems から計算する）
+  // 画面表示用の合計（useState にせず、毎回 cartItems から計算する）
   const totalWithoutTax = cartItems.reduce(
     (sum, item) => sum + item.price * item.quantity,
     0
@@ -109,13 +201,27 @@ export default function PosPage() {
   const taxAmount = Math.floor((totalWithoutTax * TAX_RATE_PERCENT) / 100);
   const totalWithTax = totalWithoutTax + taxAmount;
 
+  // 画面上部の表示（customer の状態から、毎回作る）
+  const memberIdLabel =
+    customer === null
+      ? '（未入力）'
+      : customer.type === 'member'
+        ? customer.code
+        : '（会員なし）';
+  const customerNameLabel =
+    customer === null
+      ? ''
+      : customer.type === 'member'
+        ? customer.name
+        : '非会員のお客様';
+
   return (
     <main className="mx-auto max-w-3xl p-6">
       {/* 上部：日付・担当者・会員 */}
       <div className="mb-4 flex justify-between text-sm">
         <div>
-          <p>会員ID：（未入力）</p>
-          <p>お客様名：</p>
+          <p>会員ID：{memberIdLabel}</p>
+          <p>お客様名：{customerNameLabel}</p>
         </div>
         <div className="text-right">
           <p>2026/09/30 12:00:00</p>
@@ -127,12 +233,24 @@ export default function PosPage() {
       <div className="mb-4 flex gap-2">
         <input
           type="text"
+          value={memberCodeInput}
+          onChange={(e) => setMemberCodeInput(e.target.value)}
           placeholder="会員ID"
           className="flex-1 rounded border px-3 py-2"
         />
-        <button className="rounded border px-4 py-2">会員ID読み込み</button>
-        <button className="rounded border px-4 py-2">お客様ID読み込み</button>
+        <button
+          onClick={handleLoadMember}
+          className="rounded border px-4 py-2"
+        >
+          会員ID読み込み
+        </button>
+        <button onClick={handleGuest} className="rounded border px-4 py-2">
+          お客様ID読み込み
+        </button>
       </div>
+      {memberMessage && (
+        <p className="-mt-2 mb-4 text-sm text-red-600">{memberMessage}</p>
+      )}
 
       {/* 商品検索 */}
       <div className="mb-4 rounded border p-4">
@@ -152,7 +270,6 @@ export default function PosPage() {
         <p>商品単価：{foundProduct ? `${foundProduct.price}円` : ''}</p>
         {message && <p className="text-sm text-red-600">{message}</p>}
 
-        {/* ★③-4：ボタンと handleAdd をつなぐ */}
         <button
           onClick={handleAdd}
           className="mt-2 rounded bg-blue-600 px-4 py-2 text-white"
@@ -172,7 +289,6 @@ export default function PosPage() {
           </tr>
         </thead>
         <tbody>
-          {/* ★③-5：cartItems の中身から、行を自動で作る */}
           {cartItems.map((item) => (
             <tr key={item.id} className="border-b">
               <td className="py-2">{item.name}</td>
@@ -184,27 +300,31 @@ export default function PosPage() {
         </tbody>
       </table>
 
+      {/* 合計（画面表示用） */}
       <div className="mb-4 text-right text-sm">
-       <p>合計（税抜）：{totalWithoutTax}円</p>
-       <p>消費税：{taxAmount}円</p>
-       <p className="text-base font-semibold">合計（税込）：{totalWithTax}円</p>
-     </div>
+        <p>合計（税抜）：{totalWithoutTax}円</p>
+        <p>消費税：{taxAmount}円</p>
+        <p className="text-base font-semibold">合計（税込）：{totalWithTax}円</p>
+      </div>
 
       {/* 購入確定 */}
-      <button 
-        onClick={handleConfirm} 
+      <button
+        onClick={handleConfirm}
         className="w-full rounded bg-blue-600 py-3 text-white"
       >
         購入確定
       </button>
 
-      {/* ★⑤-4：合計金額のポップアップ */}
-      {showTotal && (
+      {/* 合計金額のポップアップ（サーバーが返した値を表示する） */}
+      {showTotal && result && (
         <div className="fixed inset-0 flex items-center justify-center bg-black/40">
           <div className="w-full max-w-sm rounded bg-white p-6 text-center">
+            <p className="mb-1 text-xs text-zinc-500">
+              取引番号：{result.transactionId}
+            </p>
             <p className="mb-4 text-lg font-semibold">合計金額</p>
-            <p>{totalWithTax}円（税込）</p>
-            <p className="mb-6">{totalWithoutTax}円（税抜）</p>
+            <p>{result.totalWithTax}円（税込）</p>
+            <p className="mb-6">{result.totalWithoutTax}円（税抜）</p>
             <button
               onClick={handleClose}
               className="w-full rounded bg-blue-600 py-2 text-white"
@@ -214,8 +334,6 @@ export default function PosPage() {
           </div>
         </div>
       )}
-
-
     </main>
   );
 }
