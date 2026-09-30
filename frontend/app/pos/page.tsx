@@ -1,11 +1,19 @@
 'use client';
 import { useState } from 'react';
 
-// ★追加1：商品の型と、商品名簿（ダミー）
 type Product = {
   code: string;
   name: string;
   price: number;
+};
+
+// ★③-1：購入リストの1行分の型
+type CartItem = {
+  id: string; // 行を区別する番号（同じ商品が2行になるため必要）
+  code: string;
+  name: string;
+  price: number;
+  quantity: number;
 };
 
 const DUMMY_PRODUCTS: Product[] = [
@@ -14,26 +22,80 @@ const DUMMY_PRODUCTS: Product[] = [
   { code: '1003', name: 'ホットコーラ', price: 500 },
 ];
 
+// ダミー：あとで tax_rates（税率マスタ）から取得する
+const TAX_RATE_PERCENT = 10;
+
 export default function PosPage() {
   const [productCode, setProductCode] = useState('');
-
   const [message, setMessage] = useState('');
-
-  // ★追加2：見つかった商品を覚える箱（最初は何もなし）
   const [foundProduct, setFoundProduct] = useState<Product | null>(null);
+  // ★③-2：購入リストを覚える箱（最初は空）
+  const [cartItems, setCartItems] = useState<CartItem[]>([]);
+    // ★⑤-1：合計ポップアップを出すかどうか
+  const [showTotal, setShowTotal] = useState(false);
 
-  // ★追加3：検索ボタンを押した時にやること
   const handleSearch = () => {
-  const product = DUMMY_PRODUCTS.find((p) => p.code === productCode);
+    const product = DUMMY_PRODUCTS.find((p) => p.code === productCode);
 
-  if (product) {
-    setFoundProduct(product);
-    setMessage('');
-  } else {
+    if (product) {
+      setFoundProduct(product);
+      setMessage('');
+    } else {
+      setFoundProduct(null);
+      setMessage('商品がマスタ未登録です');
+    }
+  };
+
+  // ★③-3：「購入リストへ追加」を押した時にやること
+  const handleAdd = () => {
+    if (!foundProduct) {
+      setMessage('先に商品を検索してください');
+      return;
+    }
+
+
+
+    const newItem: CartItem = {
+      id: crypto.randomUUID(),
+      code: foundProduct.code,
+      name: foundProduct.name,
+      price: foundProduct.price,
+      quantity: 1,
+    };
+
+    setCartItems([...cartItems, newItem]);
+
+    // 次の商品を登録できるよう、入力と表示をクリアする
+    setProductCode('');
     setFoundProduct(null);
-    setMessage('商品がマスタ未登録です');
-  }
-};
+    setMessage('');
+  };
+
+  // ★⑤-2a：「購入確定」を押した時（あとでここにAPI呼び出しが入る）
+  const handleConfirm = () => {
+    if (cartItems.length === 0) {
+      setMessage('購入リストが空です');
+      return;
+    }
+    setShowTotal(true);
+  };
+ 
+  // ★⑤-2b：ポップアップを閉じた時（画面をすべてクリアする）
+  const handleClose = () => {
+    setShowTotal(false);
+    setCartItems([]);
+    setProductCode('');
+    setFoundProduct(null);
+    setMessage('');
+  };
+
+  // ★④-2：合計の計算（useState にせず、毎回 cartItems から計算する）
+  const totalWithoutTax = cartItems.reduce(
+    (sum, item) => sum + item.price * item.quantity,
+    0
+  );
+  const taxAmount = Math.floor((totalWithoutTax * TAX_RATE_PERCENT) / 100);
+  const totalWithTax = totalWithoutTax + taxAmount;
 
   return (
     <main className="mx-auto max-w-3xl p-6">
@@ -70,16 +132,19 @@ export default function PosPage() {
             placeholder="商品コード"
             className="flex-1 rounded border px-3 py-2"
           />
-          {/* ★追加4-a：ボタンと handleSearch をつなぐ */}
           <button onClick={handleSearch} className="rounded border px-4 py-2">
             検索
           </button>
         </div>
-        {/* ★追加4-b：トレイの中身を画面に出す */}
         <p>商品名称：{foundProduct ? foundProduct.name : ''}</p>
         <p>商品単価：{foundProduct ? `${foundProduct.price}円` : ''}</p>
         {message && <p className="text-sm text-red-600">{message}</p>}
-        <button className="mt-2 rounded bg-blue-600 px-4 py-2 text-white">
+
+        {/* ★③-4：ボタンと handleAdd をつなぐ */}
+        <button
+          onClick={handleAdd}
+          className="mt-2 rounded bg-blue-600 px-4 py-2 text-white"
+        >
           購入リストへ追加
         </button>
       </div>
@@ -95,19 +160,50 @@ export default function PosPage() {
           </tr>
         </thead>
         <tbody>
-          <tr className="border-b">
-            <td className="py-2">ブレンドコーヒー</td>
-            <td>2</td>
-            <td>400</td>
-            <td>800</td>
-          </tr>
+          {/* ★③-5：cartItems の中身から、行を自動で作る */}
+          {cartItems.map((item) => (
+            <tr key={item.id} className="border-b">
+              <td className="py-2">{item.name}</td>
+              <td>{item.quantity}</td>
+              <td>{item.price}</td>
+              <td>{item.price * item.quantity}</td>
+            </tr>
+          ))}
         </tbody>
       </table>
 
+      <div className="mb-4 text-right text-sm">
+       <p>合計（税抜）：{totalWithoutTax}円</p>
+       <p>消費税：{taxAmount}円</p>
+       <p className="text-base font-semibold">合計（税込）：{totalWithTax}円</p>
+     </div>
+
       {/* 購入確定 */}
-      <button className="w-full rounded bg-blue-600 py-3 text-white">
+      <button 
+        onClick={handleConfirm} 
+        className="w-full rounded bg-blue-600 py-3 text-white"
+      >
         購入確定
       </button>
+
+      {/* ★⑤-4：合計金額のポップアップ */}
+      {showTotal && (
+        <div className="fixed inset-0 flex items-center justify-center bg-black/40">
+          <div className="w-full max-w-sm rounded bg-white p-6 text-center">
+            <p className="mb-4 text-lg font-semibold">合計金額</p>
+            <p>{totalWithTax}円（税込）</p>
+            <p className="mb-6">{totalWithoutTax}円（税抜）</p>
+            <button
+              onClick={handleClose}
+              className="w-full rounded bg-blue-600 py-2 text-white"
+            >
+              閉じる
+            </button>
+          </div>
+        </div>
+      )}
+
+
     </main>
   );
 }
