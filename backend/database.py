@@ -2,31 +2,42 @@ import os
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
+from sqlalchemy.engine import URL
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
-# .env の内容を、環境変数として読み込む
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    raise RuntimeError(".env に DATABASE_URL が書かれていません")
+DATABASE_URL = os.getenv("DATABASE_URL")  # SQLite用（ローカル開発）
 
-# SQLite のときだけ必要な設定（FastAPI が複数のスレッドで動くため）
-connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+if DATABASE_URL:
+    url = DATABASE_URL
+    connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+else:
+    # Azure MySQL：部品を別々に渡す（パスワードに記号があっても壊れない）
+    url = URL.create(
+        "mysql+pymysql",
+        username=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASSWORD"),
+        host=os.getenv("DB_HOST"),
+        port=3306,
+        database=os.getenv("DB_NAME"),
+    )
+    connect_args = {"ssl": {"ssl": True}}  # AzureはSSL必須
 
-# DBへの入り口
-engine = create_engine(DATABASE_URL, connect_args=connect_args)
+engine = create_engine(
+    url,
+    connect_args=connect_args,
+    pool_pre_ping=True,  # 使う前に接続が生きているか確認
+    pool_recycle=1800,   # 古い接続を使い回さない
+)
 
-# DBと会話するための窓口を作る道具
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
-# すべてのテーブル定義の親
 class Base(DeclarativeBase):
     pass
 
 
-# APIごとに、窓口を開いて、終わったら閉じる
 def get_db():
     db = SessionLocal()
     try:
